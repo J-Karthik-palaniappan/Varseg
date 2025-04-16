@@ -1,0 +1,4 @@
+runs/
+checkpoints/
+__pycache__
+*.pth

@@ -5,7 +5,7 @@ import torch.optim as optim
 import sys
 sys.path.append("../")
 
-from models import build_vae_var, build_vae_var2
+from models import build_vae_var, build_vae_var2, build_vae_var3
 from var_utils import multiclass_metrics, build_dataset
 from var_test import test_var
 from vqvector.plots import get_weights2
@@ -32,7 +32,7 @@ def train_var(var, vae_mask, train_loader, val_loader, num_epochs=50, save_path=
     var.train()
 
     optimizer = optim.Adam(var.parameters(), lr=1e-4)
-    class_weights = get_weights2("/home/viplab/SuperRes/newvar/vqvector/hist_counts.npz").to(device)
+    class_weights = get_weights2("../vqvector/hist_counts.npz").to(device)
     criterion = nn.CrossEntropyLoss(weight = class_weights)
         
     writer = SummaryWriter()
@@ -54,11 +54,23 @@ def train_var(var, vae_mask, train_loader, val_loader, num_epochs=50, save_path=
                 gt_BL = torch.cat(gt_idxBl, dim=1)
                 x_BLCv_wo_first_l = vae_mask.quantize.idxBl_to_var_input(gt_idxBl)
 
-            logits_BLV = var(x_BLCv_wo_first_l, img, teacher_force=False)
+            logits_BLV = var(x_BLCv_wo_first_l, img, teacher_force=torch.rand(1).item() < 0.97**epoch)
             loss = criterion(logits_BLV.view(-1, V), gt_BL.view(-1))
 
             loss.backward()
             optimizer.step()
+
+            # # checking gradient flow EDITED
+            # for name, param in var.named_parameters():
+            #     if param.requires_grad:
+            #         if param.grad is None:
+            #             # print(f"[NO GRAD] {name}")
+            #             pass
+            #         else:
+            #             grad_mean = param.grad.abs().mean().item()
+            #             grad_max = param.grad.abs().max().item()
+            #             if grad_mean < 1e-7:
+            #                 print(f"[TINY GRAD] {name} | mean: {grad_mean:.2e}, max: {grad_max:.2e}")
 
             total_loss += loss.item()
             total_score += multiclass_metrics(gt_BL.detach().cpu(), logits_BLV.argmax(dim=-1).detach().cpu(), num_classes=V, all_metrics=False)
@@ -77,7 +89,7 @@ def train_var(var, vae_mask, train_loader, val_loader, num_epochs=50, save_path=
                 gt_idxBl = vae_mask.img_to_idxBl(mask)
                 gt_BL = torch.cat(gt_idxBl, dim=1)
                 x_BLCv_wo_first_l = vae_mask.quantize.idxBl_to_var_input(gt_idxBl)
-                logits_BLV = var(x_BLCv_wo_first_l, img)
+                logits_BLV = var(x_BLCv_wo_first_l, img, teacher_force=False)
 
                 loss = criterion(logits_BLV.view(-1, V), gt_BL.view(-1))
 
@@ -89,15 +101,15 @@ def train_var(var, vae_mask, train_loader, val_loader, num_epochs=50, save_path=
         writer.add_scalar("Accuracy/Validation", val_score / len(val_loader), epoch)
 
         # Save last model
-        torch.save(var.state_dict(), os.path.join(save_path, "var2_last.pth"))
+        torch.save(var.state_dict(), os.path.join(save_path, "var_last.pth"))
 
         # Save best model (lowest validation loss)
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            torch.save(var.state_dict(), os.path.join(save_path, "var2_best.pth"))
+            torch.save(var.state_dict(), os.path.join(save_path, "var_best.pth"))
 
         if epoch % 1 == 0:  # Log every 1 epochs
-            test_var(var, val_loader, indices=[0,1,2,3,4,5,6,7,8])
+            test_var(var, val_loader, indices=[0,1,2,3,4])
 
         print(f"Epoch {epoch+1}, Train Loss: {total_loss/len(train_loader):.4f}, Accuracy: {total_score/len(train_loader):.4f}, "
               f"Val Loss: {avg_val_loss:.4f}, Val accuracy: {val_score/len(val_loader):.4f}")
@@ -112,8 +124,8 @@ if __name__ == "__main__":
 
     train_dataset, val_dataset = build_dataset("/media/viplab/DATADRIVE1/skin_lesion/ISIC2018/")
 
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=8, shuffle=False)
 
     model = 2
     if model == 1:
@@ -125,11 +137,11 @@ if __name__ == "__main__":
             init_adaln=0.5, init_adaln_gamma=1e-5, init_head=0.02, init_std=-1,
         )
 
-        vae_img_ckpt = "/home/viplab/SuperRes/newvar/vqvae/checkpoints/img_best.pth"
-        vae_mask_ckpt = "/home/viplab/SuperRes/newvar/vqvae/checkpoints/mask_best.pth"
+        vae_img_ckpt = "../vqvae/checkpoints/img_best.pth"
+        vae_mask_ckpt = "../vqvae/checkpoints/mask_best.pth"
         vae_mask.load_state_dict(torch.load(vae_mask_ckpt, map_location=device), strict=True)
         vae_img.load_state_dict(torch.load(vae_img_ckpt, map_location=device), strict=True)
-        # var.load_state_dict(torch.load("/home/viplab/SuperRes/newvar/var/checkpoints/1ep.pth", map_location=device))
+        var.load_state_dict(torch.load("../var/checkpoints/var_last_save.pth", map_location=device))
     
         # Ensure vae_img and vae_mask are NOT trained
         vae_img.to(device).eval()
@@ -138,7 +150,7 @@ if __name__ == "__main__":
             param.requires_grad = False
         for param in vae_mask.parameters():
             param.requires_grad = False
-    else:
+    elif model==2:
         vae_mask, var = build_vae_var2(
             V=256, Cvae=64, ch=160, share_quant_resi=4,
             device=device, patch_nums=(1, 2, 3, 4, 5, 6, 8, 10, 13, 16),
@@ -147,13 +159,34 @@ if __name__ == "__main__":
             init_adaln=0.5, init_adaln_gamma=1e-5, init_head=0.02, init_std=-1,
         )
 
-        vae_mask_ckpt = "/home/viplab/SuperRes/newvar/vqvae/checkpoints/mask_best.pth"
+        vae_mask_ckpt = "../vqvae/checkpoints/mask_best.pth"
         vae_mask.load_state_dict(torch.load(vae_mask_ckpt, map_location=device), strict=True)
-        # var.load_state_dict(torch.load("/home/viplab/SuperRes/newvar/var/checkpoints/1ep.pth", map_location=device))
+        # var.load_state_dict(torch.load("../var/checkpoints/var_last.pth", map_location=device))
     
         # Ensure vae_img and vae_mask are NOT trained
         vae_mask.to(device).eval()
         for param in vae_mask.parameters():
             param.requires_grad = False
+    else:
+        vae_img, vae_mask, var = build_vae_var3(
+            V=256, Vimg=1024, Cvae=64, ch=160, share_quant_resi=4,
+            device=device, patch_nums=(1, 2, 3, 4, 5, 6, 8, 10, 13, 16),
+            depth=16, shared_aln=False,
+            flash_if_available=True, fused_if_available=True,
+            init_adaln=0.5, init_adaln_gamma=1e-5, init_head=0.02, init_std=-1,
+        )
 
+        vae_img_ckpt = "../vqvae/checkpoints/img_best.pth"
+        vae_mask_ckpt = "../vqvae/checkpoints/mask_best.pth"
+        vae_mask.load_state_dict(torch.load(vae_mask_ckpt, map_location=device), strict=True)
+        vae_img.load_state_dict(torch.load(vae_img_ckpt, map_location=device), strict=True)
+        # var.load_state_dict(torch.load("../var/checkpoints/var_last_save.pth", map_location=device))
+    
+        # Ensure vae_img and vae_mask are NOT trained
+        vae_img.to(device).eval()
+        vae_mask.to(device).eval()
+        for param in vae_img.parameters():
+            param.requires_grad = False
+        for param in vae_mask.parameters():
+            param.requires_grad = False
     train_var(var, vae_mask, train_loader, val_loader, num_epochs=50, save_path="./checkpoints")

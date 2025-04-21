@@ -8,7 +8,7 @@ from models.helpers import DropPath, drop_path
 
 
 # this file only provides the 3 blocks used in VAR transformer
-__all__ = ['FFN', 'AdaLNSelfAttn', 'AdaLNBeforeHead']
+__all__ = ['FFN', 'AdaLNSelfAttn', 'AdaLNBeforeHead', 'AdaLNCrossAttn', 'CrossAttention']
 
 
 # automatically import fused operators
@@ -23,11 +23,11 @@ except ImportError: pass
 try: from flash_attn import flash_attn_func              # qkv: BLHc, ret: BLHcq
 except ImportError: pass
 try: from torch.nn.functional import scaled_dot_product_attention as slow_attn    # q, k, v: BHLc
-except ImportError:
-    def slow_attn(query, key, value, scale: float, attn_mask=None, dropout_p=0.0):
-        attn = query.mul(scale) @ key.transpose(-2, -1) # BHLc @ BHcL => BHLL
-        if attn_mask is not None: attn.add_(attn_mask)
-        return (F.dropout(attn.softmax(dim=-1), p=dropout_p, inplace=True) if dropout_p > 0 else attn.softmax(dim=-1)) @ value
+except ImportError: pass
+def slow_attn(query, key, value, scale: float, attn_mask=None, dropout_p=0.0):
+    attn = query.mul(scale) @ key.transpose(-2, -1) # BHLc @ BHcL => BHLL
+    if attn_mask is not None: attn.add_(attn_mask)
+    return (F.dropout(attn.softmax(dim=-1), p=dropout_p, inplace=True) if dropout_p > 0 else attn.softmax(dim=-1)) @ value
 
 
 class FFN(nn.Module):
@@ -188,27 +188,39 @@ class CrossAttention(nn.Module):
         self.q_bias, self.v_bias = nn.Parameter(torch.zeros(dim)), nn.Parameter(torch.zeros(dim))
         self.register_buffer('zero_k_bias', torch.zeros(dim))
 
-    def forward(self, f_d, f_var,attn_bias=None):
-        B, L, C = f_d.shape
+    def forward(self, f_d, f_var, attn_bias=None):
+        B, Lq, C = f_d.shape
+        Lkv = f_var.shape[1]
 
-        f_q = F.linear(input=f_d, weight=self.mat_q.weight, bias=self.q_bias).view(B, L, 1, self.num_heads, self.head_dim)
-        f_kv = F.linear(input=f_var, weight=self.mat_kv.weight, bias=torch.cat((self.zero_k_bias, self.v_bias))).view(B, L, 2, self.num_heads, self.head_dim)
+        f_q = F.linear(input=f_d, weight=self.mat_q.weight, bias=self.q_bias).view(B, Lq, 1, self.num_heads, self.head_dim)
+        f_kv = F.linear(input=f_var, weight=self.mat_kv.weight, bias=torch.cat((self.zero_k_bias, self.v_bias))).view(B, Lkv, 2, self.num_heads, self.head_dim)
         main_type = f_kv.dtype
 
-        q = f_q.permute(2, 0, 3, 1, 4)
-        k, v = f_kv.permute(2, 0, 3, 1, 4).unbind(dim=0); dim_cat = 2 
-
-        dropout_p = 0.0
-
-        using_flash = self.using_flash and attn_bias is None and f_kv.dtype != torch.float32
-        if using_flash:
-            oup = flash_attn_func(q.to(dtype=main_type), k.to(dtype=main_type), v.to(dtype=main_type), dropout_p=dropout_p, softmax_scale=self.scale).view(B, L, C)
-        elif self.using_xform:
-            oup = memory_efficient_attention(q.to(dtype=main_type), k.to(dtype=main_type), v.to(dtype=main_type), attn_bias=None if attn_bias is None else attn_bias.to(dtype=main_type).expand(B, self.num_heads, -1, -1), p=dropout_p, scale=self.scale).view(B, L, C)
-        else:
-            oup = slow_attn(query=q, key=k, value=v, scale=self.scale, attn_mask=attn_bias, dropout_p=dropout_p).transpose(1, 2).reshape(B, L, C)
+        q = f_q.permute(2, 0, 3, 1, 4)          # [1, B, num_heads, Lq, head_dim]
+        k, v = f_kv.permute(2, 0, 3, 1, 4).unbind(dim=0)  # [B, num_heads, Lkv, head_dim]
         
+        dropout_p = 0.0
+        using_flash = self.using_flash and attn_bias is None and f_kv.dtype != torch.float32
+
+        if using_flash:
+            oup = flash_attn_func(
+                q.to(dtype=main_type), k.to(dtype=main_type), v.to(dtype=main_type),
+                dropout_p=dropout_p, softmax_scale=self.scale
+            ).view(B, Lq, C)
+        elif self.using_xform:
+            oup = memory_efficient_attention(
+                q.to(dtype=main_type), k.to(dtype=main_type), v.to(dtype=main_type),
+                attn_bias=None if attn_bias is None else attn_bias.to(dtype=main_type).expand(B, self.num_heads, Lq, Lkv),
+                p=dropout_p, scale=self.scale
+            ).view(B, Lq, C)
+        else:
+            oup = slow_attn(
+                query=q, key=k, value=v,
+                scale=self.scale, attn_mask=attn_bias, dropout_p=dropout_p
+            ).transpose(1, 2).reshape(B, Lq, C)
+
         return self.proj_drop(self.proj(oup))
+
 
     def extra_repr(self) -> str:
         return f'using_flash={self.using_flash}, using_xform={self.using_xform}, attn_l2_norm={self.attn_l2_norm}'

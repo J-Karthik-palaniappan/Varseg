@@ -154,11 +154,11 @@ class VAR(nn.Module):
             x = next_token_map
             it = self.word_embed_img(self.vae_quant_proxy_img[0].embedding(img_tokens[si]))
             # if(len(img_tokens[si][0]) <= 10):print("image:",img_tokens[si][0])
-            AdaLNSelfAttn.forward
+            # AdaLNSelfAttn.forward
             AdaLNCrossAttn.forward
             for c, b in zip(self.cross_blocks, self.blocks):
                 x = c(x=x, f=it, attn_bias=None)
-                x = b(x=x, attn_bias=None)
+                # x = b(x=x, attn_bias=None)
             logits_BlV = self.get_logits(x)
             
             # idx_Bl = sample_with_top_k_top_p_(logits_BlV, rng=rng, top_k=top_k, top_p=top_p, num_samples=1)[:, :, 0]
@@ -196,11 +196,11 @@ class VAR(nn.Module):
             x = next_token_map
             it = self.word_embed_img(self.vae_quant_proxy_img[0].embedding(img_tokens[si]))
             # if(len(img_tokens[si][0]) <= 10):print("image:",img_tokens[si][0])
-            AdaLNSelfAttn.forward
+            # AdaLNSelfAttn.forward
             AdaLNCrossAttn.forward
             for c, b in zip(self.cross_blocks, self.blocks):
                 x = c(x=x, f=it, attn_bias=None)
-                x = b(x=x, attn_bias=None)
+                # x = b(x=x, attn_bias=None)
             logits_BlV = self.get_logits(x)
             logits.append(logits_BlV)
 
@@ -250,11 +250,11 @@ class VAR(nn.Module):
         img_tokens = self.vae_quant_proxy_img[0].embedding(img_tokens)[:, :ed]
         img_tokens = self.word_embed_img(img_tokens)
         
-        AdaLNSelfAttn.forward
+        # AdaLNSelfAttn.forward
         AdaLNCrossAttn.forward
         for c, b in zip(self.cross_blocks, self.blocks):
             x_BLC = c(x=x_BLC, f=img_tokens, attn_bias=attn_bias)
-            x_BLC = b(x=x_BLC, attn_bias=attn_bias)
+            # x_BLC = b(x=x_BLC, attn_bias=attn_bias)
         x_BLC = self.get_logits(x_BLC.float())
         
         if self.prog_si == 0:

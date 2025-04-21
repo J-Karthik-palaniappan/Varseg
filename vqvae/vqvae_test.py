@@ -50,7 +50,7 @@ def test_vqvae(vqvae, model_path, test_loader, indices=None):
     
     if indices: 
         print(metrics/len(indices))
-        display_results(selected_images, save_path="outs/2.png")
+        display_results(selected_images, save_path="outs/3.png")
     else: 
         print(metrics/len(test_loader))
 
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)  # Load one image at a time
 
     # Set indices of test images to evaluate (or None for sequential images)
-    test_indices = [0, 5, 10, 18, 20, 25, 30, 40]
+    test_indices = [0, 5, 10, 18, 20, 25, 30, 40, 57, 58]
     vqvae = VQVAE(in_channels=3, vocab_size=1024, z_channels=64, ch=160, test_mode=False)
     # vqvae = VQVAE(in_channels=1, vocab_size=256, z_channels=64, ch=160, test_mode=False)
     test_vqvae(vqvae, "./checkpoints/img_best.pth", test_loader, indices=test_indices)
